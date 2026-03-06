@@ -71,6 +71,7 @@ cp .env.example .env
 ```bash
 mkdir -p secrets
 printf '%s' 'your_db_password' > secrets/db_password
+printf '%s' 'your_mcp_db_password' > secrets/mcp_db_password
 printf '%s' 'your_voyage_key' > secrets/voyage_api_key
 printf '%s' 'your_anthropic_key' > secrets/anthropic_api_key
 printf '%s' 'token1,token2' > secrets/init_tokens
@@ -78,7 +79,14 @@ printf '%s' 'admin:strong_password' > secrets/init_users
 chmod 600 secrets/*
 ```
 
-5. Edit `.env` for non-secret settings only (DB host/port/name/user, model names, feature flags).
+5. Edit `.env` for non-secret settings only. The file uses generic names like `DB_NAME`, `DB_ADMIN_USER`, `MCP_DB_USER`, `LLM_MODEL`, and `HTTP_ADDRESS`; Docker Compose maps those into the internal `PGEDGE_*` variables required by the MCP runtime. Existing `.env` files that still use the older `PGEDGE_*` names continue to work.
+
+Fresh installs create two database roles by default:
+
+- `memory_admin`: owner/admin role used by PostgreSQL setup, pgai install, and the vectorizer worker
+- `memory_mcp`: least-privilege role used only by the MCP server, granted access to `public.memory_nodes` and explicitly revoked from `ai`
+
+`memory_mcp` is created during the initial PostgreSQL bootstrap from `init-db/02-mcp-role.sh`. If `secrets/mcp_db_password` is omitted, the stack falls back to `secrets/db_password`, but the role separation still applies.
 
 ## Run
 
@@ -108,6 +116,8 @@ This stack enables automatic embedding sync for `public.memory_nodes.content`:
 - `vectorizer-worker` continuously processes queue jobs
 - new/updated rows are embedded asynchronously into `memory_nodes.embedding`
 
+The `ai` schema remains installed for pgai/vectorizer internals, but the MCP server connects with the restricted `memory_mcp` role and is explicitly revoked from `ai`, so schema discovery stays focused on `public.memory_nodes`.
+
 Check vectorizer status:
 
 ```bash
@@ -134,8 +144,10 @@ Run them from host shell if you want:
 
 ```bash
 DBPASS="$(tr -d '\r\n' < secrets/db_password)"
+DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
+DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
 docker compose exec -T -e PGPASSWORD="$DBPASS" db psql \
-  -U "$PGEDGE_DB_1_USER" -d "$PGEDGE_DB_1_DATABASE" \
+  -U "$DBUSER" -d "$DBNAME" \
   -c "SELECT extname FROM pg_extension WHERE extname IN ('ai', 'vector') ORDER BY extname;" \
   -c "SELECT id, name FROM ai.vectorizer ORDER BY id;" \
   -c "SELECT id, content, embedding IS NOT NULL AS has_embedding FROM public.memory_nodes ORDER BY id DESC LIMIT 20;"
@@ -151,7 +163,7 @@ The MCP server is exposed at:
 
 Auth header format:
 
-- `Authorization: Bearer <token-from-INIT_TOKENS>`
+- `Authorization: Bearer <token-from-secrets/init_tokens>`
 
 ### Codex MCP config example
 
@@ -252,14 +264,18 @@ Backup files are stored in:
 
 ```bash
 DBPASS="$(tr -d '\r\n' < secrets/db_password)"
-cat ./postgres/backups/<backup-file.sql.gz> | gunzip | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$PGEDGE_DB_1_USER" -d "$PGEDGE_DB_1_DATABASE"
+DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
+DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
+cat ./postgres/backups/<backup-file.sql.gz> | gunzip | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$DBUSER" -d "$DBNAME"
 ```
 
 If your dump is plain `.sql` (not gzipped), use:
 
 ```bash
 DBPASS="$(tr -d '\r\n' < secrets/db_password)"
-cat ./postgres/backups/<backup-file.sql> | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$PGEDGE_DB_1_USER" -d "$PGEDGE_DB_1_DATABASE"
+DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
+DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
+cat ./postgres/backups/<backup-file.sql> | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$DBUSER" -d "$DBNAME"
 ```
 
 ## Project structure
@@ -272,6 +288,7 @@ cat ./postgres/backups/<backup-file.sql> | docker exec -i -e PGPASSWORD="$DBPASS
 - `scripts/runtime/*.sh`: secret-file loaders and service startup wrappers
 - `postgres/data/`: local PostgreSQL bind-mounted data directory
 - `postgres/backups/`: local backup directory
+- `postgres/mcp-data/`: persistent MCP runtime state (`tokens.json`, `users.json`, conversations)
 - `pgedge-postgres-mcp/`: MCP server source/build context
 
 ## Common operations
@@ -334,9 +351,8 @@ This compose stack mounts `./secrets` as `/run/secrets` and reads files at start
 - `db`: `POSTGRES_PASSWORD_FILE=/run/secrets/db_password`
 - `pgai-installer`: reads `/run/secrets/db_password`
 - `vectorizer-worker`: reads `/run/secrets/db_password` and `/run/secrets/voyage_api_key`
-- `mcp`: reads `db_password`, `init_tokens`, `init_users`, `anthropic_api_key`, `voyage_api_key`
+- `mcp`: reads `mcp_db_password` first, then falls back to `db_password`; it also reads `init_tokens`, `init_users`, `anthropic_api_key`, and `voyage_api_key`
 - `pgbackups`: reads `/run/secrets/db_password`
-- `mcp` token bootstrap is handled by `scripts/runtime/mcp-entrypoint.sh` without logging raw token values
 
 Why this is different from `.env`:
 
@@ -346,6 +362,7 @@ Why this is different from `.env`:
 Required files in `./secrets`:
 
 - `db_password`
+- `mcp_db_password`
 - `voyage_api_key`
 - `anthropic_api_key`
 - `init_tokens`

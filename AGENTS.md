@@ -7,7 +7,7 @@ Rules:
 - Keep `./secrets` mounted read-only in services (`:ro`).
 - Do not expose Postgres port `5432` to host unless explicitly requested.
 - Preserve current bootstrap flow:
-  - `fs-init` prepares directories and seeds `postgres/mcp-data/tokens.json` from `secrets/init_tokens`.
+  - `fs-init` prepares host-mounted directories.
   - `mcp` depends on `fs-init` completion and `db` health.
 - `mcp` must mount `./postgres/mcp-data:/app/data` for persistent `tokens.json`, `users.json`, and conversation DB.
 - If authentication behaves unexpectedly, first check:
