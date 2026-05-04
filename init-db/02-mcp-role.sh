@@ -1,14 +1,8 @@
 #!/bin/sh
 set -eu
 
-MCP_DB_USER="${PGEDGE_MCP_DB_USER:-memory_mcp}"
-MCP_DB_PASSWORD_FILE="${PGEDGE_MCP_DB_PASSWORD_FILE:-/run/secrets/mcp_db_password}"
-
-if [ ! -f "$MCP_DB_PASSWORD_FILE" ]; then
-  MCP_DB_PASSWORD_FILE="/run/secrets/db_password"
-fi
-
-MCP_DB_PASSWORD="$(tr -d '\r\n' < "$MCP_DB_PASSWORD_FILE")"
+MCP_DB_USER="${PGEDGE_MCP_DB_USER:?Missing PGEDGE_MCP_DB_USER}"
+MCP_DB_PASSWORD="${PGEDGE_MCP_DB_PASSWORD:?Missing PGEDGE_MCP_DB_PASSWORD}"
 
 psql -v ON_ERROR_STOP=1 \
   --username "$POSTGRES_USER" \

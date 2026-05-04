@@ -25,17 +25,16 @@ services:
     container_name: open-memory-db
     restart: always
     environment:
-      POSTGRES_DB: ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}
-      POSTGRES_USER: ${DB_ADMIN_USER:-${PGEDGE_DB_1_USER:-memory_admin}}
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+      POSTGRES_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
       POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
       PGDATA: /var/lib/postgresql/data
-      PGEDGE_MCP_DB_USER: ${MCP_DB_USER:-${PGEDGE_MCP_DB_USER:-memory_mcp}}
-      PGEDGE_MCP_DB_PASSWORD_FILE: /run/secrets/mcp_db_password
+      PGEDGE_MCP_DB_USER: ${MCP_DB_USER:?MCP_DB_USER is required}
+      PGEDGE_MCP_DB_PASSWORD: ${MCP_DB_PASSWORD:?MCP_DB_PASSWORD is required}
     volumes:
       - ./postgres/data:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d
-      - ./secrets:/run/secrets:ro
     depends_on:
       fs-init:
         condition: service_completed_successfully
@@ -48,7 +47,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${DB_ADMIN_USER:-${PGEDGE_DB_1_USER:-memory_admin}} -d ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}",
+          "pg_isready -U ${DB_ADMIN_USER:?DB_ADMIN_USER is required} -d ${DB_NAME:?DB_NAME is required}",
         ]
       interval: 5s
       timeout: 5s
@@ -65,13 +64,12 @@ services:
         condition: service_healthy
     environment:
       PGAI_DB_HOST: db
-      PGAI_DB_PORT: ${DB_PORT:-${PGEDGE_DB_1_PORT:-5432}}
-      PGAI_DB_DATABASE: ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}
-      PGAI_DB_USER: ${DB_ADMIN_USER:-${PGEDGE_DB_1_USER:-memory_admin}}
-      PGAI_DB_PASSWORD_FILE: /run/secrets/db_password
+      PGAI_DB_PORT: ${DB_PORT:?DB_PORT is required}
+      PGAI_DB_DATABASE: ${DB_NAME:?DB_NAME is required}
+      PGAI_DB_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
+      PGAI_DB_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
     volumes:
       - ./pgai-init:/pgai-init:ro
-      - ./secrets:/run/secrets:ro
     networks:
       - default
 
@@ -85,20 +83,15 @@ services:
         condition: service_healthy
       pgai-installer:
         condition: service_completed_successfully
-    entrypoint: ["/bin/sh", "/runtime/vectorizer-entrypoint.sh"]
     environment:
-      PGAI_DB_HOST: db
-      PGAI_DB_PORT: ${DB_PORT:-${PGEDGE_DB_1_PORT:-5432}}
-      PGAI_DB_DATABASE: ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}
-      PGAI_DB_USER: ${DB_ADMIN_USER:-${PGEDGE_DB_1_USER:-memory_admin}}
-      PGAI_DB_PASSWORD_FILE: /run/secrets/db_password
-      VOYAGE_API_KEY_FILE: /run/secrets/voyage_api_key
+      PGAI_VECTORIZER_WORKER_DB_URL: postgres://${DB_ADMIN_USER:?DB_ADMIN_USER is required}:${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}@db:${DB_PORT:?DB_PORT is required}/${DB_NAME:?DB_NAME is required}
+      VOYAGE_API_KEY: ${PGEDGE_VOYAGE_API_KEY:?PGEDGE_VOYAGE_API_KEY is required}
     command: ["--poll-interval", "5s"]
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          'python -c "import os,pathlib,psycopg; pw=pathlib.Path(''/run/secrets/db_password'').read_text().strip(); conn=psycopg.connect(host=os.environ[''PGAI_DB_HOST''], port=os.environ[''PGAI_DB_PORT''], dbname=os.environ[''PGAI_DB_DATABASE''], user=os.environ[''PGAI_DB_USER''], password=pw); cur=conn.cursor(); cur.execute(''SELECT 1 FROM ai.vectorizer LIMIT 1''); cur.fetchone(); conn.close()"',
+          'python -c "import os,psycopg; conn=psycopg.connect(os.environ[''PGAI_VECTORIZER_WORKER_DB_URL'']); cur=conn.cursor(); cur.execute(''SELECT 1 FROM ai.vectorizer LIMIT 1''); cur.fetchone(); conn.close()"',
         ]
       interval: 30s
       timeout: 5s
@@ -106,51 +99,49 @@ services:
       start_period: 15s
     networks:
       - default
-    volumes:
-      - ./scripts/runtime:/runtime:ro
-      - ./secrets:/run/secrets:ro
 
-  # The MCP Server (Built from source in the subfolder)
+  # The MCP Server (pulled from GitHub Container Registry)
   mcp:
-    build:
-      context: ./pgedge-postgres-mcp
-      dockerfile: Dockerfile.server
+    image: ghcr.io/pgedge/postgres-mcp:1.0.0
     container_name: open-memory-mcp
     restart: always
-    entrypoint: ["/runtime/mcp-entrypoint.sh"]
-    env_file:
-      - .env
     environment:
-      PGEDGE_DB_1_NAME: ${DB_CONNECTION_NAME:-${PGEDGE_DB_1_NAME:-database}}
-      PGEDGE_DB_1_HOST: ${DB_HOST:-${PGEDGE_DB_1_HOST:-db}}
-      PGEDGE_DB_1_PORT: ${DB_PORT:-${PGEDGE_DB_1_PORT:-5432}}
-      PGEDGE_DB_1_DATABASE: ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}
-      PGEDGE_DB_1_USER: ${MCP_DB_USER:-${PGEDGE_MCP_DB_USER:-memory_mcp}}
-      PGEDGE_DB_1_PASSWORD_FILE: /run/secrets/mcp_db_password
-      PGEDGE_DB_1_SSLMODE: ${DB_SSLMODE:-${PGEDGE_DB_1_SSLMODE:-prefer}}
-      PGEDGE_DB_1_ALLOW_WRITES: ${MCP_ALLOW_WRITES:-${PGEDGE_DB_1_ALLOW_WRITES:-true}}
-      PGEDGE_HTTP_ENABLED: ${HTTP_ENABLED:-${PGEDGE_HTTP_ENABLED:-true}}
-      PGEDGE_HTTP_ADDRESS: ${HTTP_ADDRESS:-${PGEDGE_HTTP_ADDRESS:-:8080}}
-      PGEDGE_TLS_ENABLED: ${TLS_ENABLED:-${PGEDGE_TLS_ENABLED:-false}}
-      PGEDGE_LLM_PROVIDER: ${LLM_PROVIDER:-${PGEDGE_LLM_PROVIDER:-anthropic}}
-      PGEDGE_LLM_MODEL: ${LLM_MODEL:-${PGEDGE_LLM_MODEL:-claude-3-5-sonnet-20240620}}
-      PGEDGE_EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-${PGEDGE_EMBEDDING_ENABLED:-true}}
-      PGEDGE_EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-${PGEDGE_EMBEDDING_PROVIDER:-voyage}}
-      PGEDGE_EMBEDDING_MODEL: ${EMBEDDING_MODEL:-${PGEDGE_EMBEDDING_MODEL:-voyage-3}}
+      PGEDGE_DB_HOST: ${DB_HOST:?DB_HOST is required}
+      PGEDGE_DB_PORT: ${DB_PORT:?DB_PORT is required}
+      PGEDGE_DB_NAME: ${DB_NAME:?DB_NAME is required}
+      PGEDGE_DB_USER: ${MCP_DB_USER:?MCP_DB_USER is required}
+      PGEDGE_DB_PASSWORD: ${MCP_DB_PASSWORD:?MCP_DB_PASSWORD is required}
+      PGEDGE_DB_SSLMODE: ${DB_SSLMODE:?DB_SSLMODE is required}
+      PGEDGE_DB_ALLOW_WRITES: ${MCP_ALLOW_WRITES:?MCP_ALLOW_WRITES is required}
+      PGEDGE_HTTP_ENABLED: ${HTTP_ENABLED:?HTTP_ENABLED is required}
+      PGEDGE_HTTP_ADDRESS: ${HTTP_ADDRESS:?HTTP_ADDRESS is required}
+      PGEDGE_TLS_ENABLED: ${TLS_ENABLED:?TLS_ENABLED is required}
+      PGEDGE_LLM_ENABLED: false
+      PGEDGE_EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:?EMBEDDING_ENABLED is required}
+      PGEDGE_EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:?EMBEDDING_PROVIDER is required}
+      PGEDGE_EMBEDDING_MODEL: ${EMBEDDING_MODEL:?EMBEDDING_MODEL is required}
+      PGEDGE_VOYAGE_API_KEY: ${PGEDGE_VOYAGE_API_KEY:?PGEDGE_VOYAGE_API_KEY is required}
+      PGEDGE_DATA_DIR: /app/data
+      INIT_TOKENS: ${INIT_TOKENS:?INIT_TOKENS is required}
     ports:
       - "8080:8080" # MCP API
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       fs-init:
         condition: service_completed_successfully
       db:
         condition: service_healthy
     volumes:
-      - ./scripts/runtime:/runtime:ro
-      - ./secrets:/run/secrets:ro
       - ./postgres/mcp-data:/app/data
     networks:
       default:
         aliases:
+          - postgres-mcp
           - memory-mcp
           - mcp
 
@@ -164,20 +155,17 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_HOST: db
-      POSTGRES_PORT: ${DB_PORT:-${PGEDGE_DB_1_PORT:-5432}}
-      POSTGRES_DB: ${DB_NAME:-${PGEDGE_DB_1_DATABASE:-open_memory}}
-      POSTGRES_USER: ${DB_ADMIN_USER:-${PGEDGE_DB_1_USER:-memory_admin}}
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_PORT: ${DB_PORT:?DB_PORT is required}
+      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+      POSTGRES_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
       SCHEDULE: "@daily"
       TZ: "Europe/Stockholm"
       BACKUP_KEEP_DAYS: 15
       BACKUP_KEEP_WEEKS: 4
       BACKUP_KEEP_MONTHS: 6
-    entrypoint: ["/bin/sh", "/runtime/pgbackups-entrypoint.sh"]
     volumes:
       - ./postgres/backups:/backups
-      - ./scripts/runtime:/runtime:ro
-      - ./secrets:/run/secrets:ro
     healthcheck:
       test:
         ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ >/dev/null || exit 1"]

@@ -54,46 +54,46 @@ git clone https://github.com/Milad/open-memory.git open-memory
 cd open-memory
 ```
 
-2. Clone the MCP server dependency at `v1.0.0-beta3` (shallow):
-
-```bash
-git clone --depth 1 --branch v1.0.0-beta3 https://github.com/pgEdge/pgedge-postgres-mcp.git
-```
-
-3. Create env file:
+2. Create env file:
 
 ```bash
 cp .env.example .env
 ```
 
-4. Create secret files (used by runtime wrappers):
+3. Edit `.env` with your real credentials and runtime settings.
 
 ```bash
-mkdir -p secrets
-printf '%s' 'your_db_password' > secrets/db_password
-printf '%s' 'your_mcp_db_password' > secrets/mcp_db_password
-printf '%s' 'your_voyage_key' > secrets/voyage_api_key
-printf '%s' 'your_anthropic_key' > secrets/anthropic_api_key
-printf '%s' 'token1,token2' > secrets/init_tokens
-printf '%s' 'admin:strong_password' > secrets/init_users
-chmod 600 secrets/*
+chmod 600 .env
 ```
 
-5. Edit `.env` for non-secret settings only. The file uses generic names like `DB_NAME`, `DB_ADMIN_USER`, `MCP_DB_USER`, `LLM_MODEL`, and `HTTP_ADDRESS`; Docker Compose maps those into the internal `PGEDGE_*` variables required by the MCP runtime. Existing `.env` files that still use the older `PGEDGE_*` names continue to work.
+Use `.env` for both configuration and secrets in this deployment model. On live servers, keep `.env` untracked and set to `0600`.
+
+The MCP service is pulled from GitHub Container Registry and is currently pinned in `docker-compose.yml` to:
+
+- `ghcr.io/pgedge/postgres-mcp:1.0.0`
+
+In the current Compose configuration, the pgEdge built-in LLM feature is disabled (`PGEDGE_LLM_ENABLED=false`). This stack exposes MCP, embeddings, and storage features, but not the pgEdge LLM/chat functionality.
 
 Fresh installs create two database roles by default:
 
 - `memory_admin`: owner/admin role used by PostgreSQL setup, pgai install, and the vectorizer worker
 - `memory_mcp`: least-privilege role used only by the MCP server, granted access to `public.memory_nodes` and explicitly revoked from `ai`
 
-`memory_mcp` is created during the initial PostgreSQL bootstrap from `init-db/02-mcp-role.sh`. If `secrets/mcp_db_password` is omitted, the stack falls back to `secrets/db_password`, but the role separation still applies.
+`memory_mcp` is created during the initial PostgreSQL bootstrap from `init-db/02-mcp-role.sh`.
+
+Important password note:
+
+- Set `MCP_DB_PASSWORD` explicitly.
+- If you test the upstream `ghcr.io/pgedge/postgres-mcp` image without this repo's wrapper, avoid shell metacharacters in the password.
+- Characters such as `!`, `$`, backticks, quotes, `;`, `&`, and `|` may break the upstream container startup script.
+- A conservative safe pattern for `MCP_DB_PASSWORD` is letters, numbers, `_`, `-`, and `.` only.
 
 ## Run
 
 Start all services in background:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Check status:
@@ -143,7 +143,7 @@ LIMIT 20;
 Run them from host shell if you want:
 
 ```bash
-DBPASS="$(tr -d '\r\n' < secrets/db_password)"
+DBPASS="${DB_ADMIN_PASSWORD:-$(grep '^DB_ADMIN_PASSWORD=' .env | cut -d= -f2-)}"
 DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
 DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
 docker compose exec -T -e PGPASSWORD="$DBPASS" db psql \
@@ -161,9 +161,11 @@ The MCP server is exposed at:
 
 - `http://localhost:8080/mcp/v1`
 
+This endpoint is being used as an MCP tool server only. The staged Compose configuration disables the upstream pgEdge LLM feature, so do not expect pgEdge-hosted chat or model proxy behavior from this deployment.
+
 Auth header format:
 
-- `Authorization: Bearer <token-from-secrets/init_tokens>`
+- `Authorization: Bearer <token-from-INIT_TOKENS-in-.env>`
 
 ### Codex MCP config example
 
@@ -263,7 +265,7 @@ Backup files are stored in:
 2. Restore into the running DB:
 
 ```bash
-DBPASS="$(tr -d '\r\n' < secrets/db_password)"
+DBPASS="${DB_ADMIN_PASSWORD:-$(grep '^DB_ADMIN_PASSWORD=' .env | cut -d= -f2-)}"
 DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
 DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
 cat ./postgres/backups/<backup-file.sql.gz> | gunzip | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$DBUSER" -d "$DBNAME"
@@ -272,7 +274,7 @@ cat ./postgres/backups/<backup-file.sql.gz> | gunzip | docker exec -i -e PGPASSW
 If your dump is plain `.sql` (not gzipped), use:
 
 ```bash
-DBPASS="$(tr -d '\r\n' < secrets/db_password)"
+DBPASS="${DB_ADMIN_PASSWORD:-$(grep '^DB_ADMIN_PASSWORD=' .env | cut -d= -f2-)}"
 DBUSER="${DB_ADMIN_USER:-$(grep '^DB_ADMIN_USER=' .env | cut -d= -f2-)}"
 DBNAME="${DB_NAME:-$(grep '^DB_NAME=' .env | cut -d= -f2-)}"
 cat ./postgres/backups/<backup-file.sql> | docker exec -i -e PGPASSWORD="$DBPASS" open-memory-db psql -U "$DBUSER" -d "$DBNAME"
@@ -285,11 +287,10 @@ cat ./postgres/backups/<backup-file.sql> | docker exec -i -e PGPASSWORD="$DBPASS
 - `init-db/01-init.sql`: DB extension/table/index bootstrap
 - `pgai-init/installer.sh`: runs `pgai install` and applies vectorizer SQL
 - `pgai-init/vectorizer.sql`: pgai vectorizer creation SQL
-- `scripts/runtime/*.sh`: secret-file loaders and service startup wrappers
+- `scripts/runtime/*.sh`: MCP/vectorizer startup wrappers
 - `postgres/data/`: local PostgreSQL bind-mounted data directory
 - `postgres/backups/`: local backup directory
 - `postgres/mcp-data/`: persistent MCP runtime state (`tokens.json`, `users.json`, conversations)
-- `pgedge-postgres-mcp/`: MCP server source/build context
 
 ## Common operations
 
@@ -305,10 +306,10 @@ Stop and remove volumes (deletes DB data):
 docker compose down -v
 ```
 
-Rebuild only MCP service:
+Recreate only MCP service:
 
 ```bash
-docker compose up -d --build mcp
+docker compose up -d mcp
 ```
 
 Re-run pgai installer (idempotent):
@@ -320,11 +321,11 @@ docker compose up --force-recreate pgai-installer
 ## Security notes
 
 - Do not commit `.env` with real secrets.
-- Keep secret values out of `.env` and only in `./secrets/*`.
+- Treat `.env` as production-sensitive and keep it at `0600` on live servers.
 - Rotate tokens/keys if they were ever exposed.
 - Keep `db` unexposed to host unless you explicitly need host-side SQL access.
 - Third-party license inventory: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
-- Read [pgEdge Postgres MCP Server: Best Practices - Querying the Server](https://docs.pgedge.com/pgedge-postgres-mcp-server/v1-0-0-beta3/guide/querying/)
+- Read [pgEdge Postgres MCP Server: Best Practices - Querying the Server](https://docs.pgedge.com/pgedge-postgres-mcp-server/guide/querying/)
 
 ## Production auth posture
 
@@ -344,26 +345,13 @@ What to do for stricter policy:
 2. If you cannot reinitialize, edit `pg_hba.conf` in the data directory and reload config:
    `SELECT pg_reload_conf();`
 
-## Secret files setup
+## Environment file setup
 
-This compose stack mounts `./secrets` as `/run/secrets` and reads files at startup.
+This compose stack reads credentials and tokens directly from `.env`.
 
-- `db`: `POSTGRES_PASSWORD_FILE=/run/secrets/db_password`
-- `pgai-installer`: reads `/run/secrets/db_password`
-- `vectorizer-worker`: reads `/run/secrets/db_password` and `/run/secrets/voyage_api_key`
-- `mcp`: reads `mcp_db_password` first, then falls back to `db_password`; it also reads `init_tokens`, `init_users`, `anthropic_api_key`, and `voyage_api_key`
-- `pgbackups`: reads `/run/secrets/db_password`
+- `DB_ADMIN_PASSWORD`: PostgreSQL admin password
+- `MCP_DB_PASSWORD`: MCP database user password
+- `PGEDGE_VOYAGE_API_KEY`: Voyage API key for vectorization
+- `INIT_TOKENS`: comma-separated bearer tokens for API access
 
-Why this is different from `.env`:
-
-- `.env` values are injected as container environment variables.
-- Secret files are mounted as files, consumed at process startup, and can be rotated without rewriting `.env`.
-
-Required files in `./secrets`:
-
-- `db_password`
-- `mcp_db_password`
-- `voyage_api_key`
-- `anthropic_api_key`
-- `init_tokens`
-- `init_users`
+Keep the real `.env` file out of version control and set it to `0600` on production systems.

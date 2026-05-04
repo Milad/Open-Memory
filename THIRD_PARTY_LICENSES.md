@@ -4,10 +4,10 @@ This project depends on third-party software and container images. The list belo
 
 ## Core runtime components
 
-1. `pgedge-postgres-mcp` (included as source under `./pgedge-postgres-mcp`)
+1. `ghcr.io/pgedge/postgres-mcp` / `pgEdge/pgedge-postgres-mcp`
 - License: PostgreSQL License
 - Source: https://github.com/pgEdge/pgedge-postgres-mcp
-- License file: `pgedge-postgres-mcp/LICENSE.md`
+- License file: https://github.com/pgEdge/pgedge-postgres-mcp/blob/main/LICENSE.md
 
 2. `timescale/timescaledb-ha:pg17` (Docker image/repo)
 - License: Apache License 2.0 (image repository)
