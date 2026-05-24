@@ -1,11 +1,6 @@
 # Configuration files
 .env
-secrets/*
-!secrets/.gitkeep
 
 # Data
 postgres/*
 !postgres/.gitkeep
-
-# 3rd-party dependencies
-pgedge-postgres-mcp/
