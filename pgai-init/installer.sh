@@ -1,14 +1,12 @@
 #!/bin/sh
 set -eu
 
-read_secret() {
-  secret_file="$1"
-  tr -d '\r\n' < "$secret_file"
-}
-
 if [ -z "${PGAI_VECTORIZER_WORKER_DB_URL:-}" ]; then
-  DB_PASSWORD_FILE="${PGAI_DB_PASSWORD_FILE:-/run/secrets/db_password}"
-  DB_PASSWORD="$(read_secret "$DB_PASSWORD_FILE")"
+  DB_PASSWORD="${PGAI_DB_PASSWORD:-}"
+  if [ -z "$DB_PASSWORD" ]; then
+    echo "Missing PGAI_DB_PASSWORD." >&2
+    exit 1
+  fi
   export PGAI_VECTORIZER_WORKER_DB_URL="$(
     PGAI_DB_HOST="$PGAI_DB_HOST" \
     PGAI_DB_PORT="$PGAI_DB_PORT" \
