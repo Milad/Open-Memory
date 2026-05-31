@@ -78,6 +78,7 @@ services:
     image: timescale/pgai-vectorizer-worker:v0.12.1
     container_name: open-memory-vectorizer-worker
     restart: always
+    mem_limit: ${PGAI_VECTORIZER_WORKER_MEM_LIMIT:-400m}
     depends_on:
       db:
         condition: service_healthy
